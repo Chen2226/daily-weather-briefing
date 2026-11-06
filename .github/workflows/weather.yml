@@ -23,6 +23,7 @@ jobs:
 
       - name: 4. 运行脚本发送邮件
         env:
+          QWEATHER_HOST: ${{ secrets.QWEATHER_HOST }}
           QWEATHER_KEY: ${{ secrets.QWEATHER_KEY }}
           CITY: ${{ secrets.CITY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

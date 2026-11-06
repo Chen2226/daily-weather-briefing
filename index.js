@@ -3,11 +3,11 @@ import nodemailer from 'nodemailer';
 // 1. 读取环境变量配置
 const {
   QWEATHER_KEY,                          // 必填：和风天气 API Key
-  QWEATHER_HOST = 'devapi.qweather.com', // 选填：免费版默认 devapi.qweather.com
+  QWEATHER_HOST,                        // 必填：和风天气账号专属 API Host
   CITY = '101010100',                    // 必填：支持中文城市名（如 "杭州"）或 LocationID
   OPENAI_API_KEY,                        // 必填：OpenAI 兼容接口密钥
   OPENAI_BASE_URL = 'https://api.openai.com/v1', // 选填：接口地址
-  OPENAI_MODEL = 'gpt-4o-mini',          // 选填：模型名称
+  OPENAI_MODEL = 'gpt-4o-mini',          // 选填：模型名称，多个模型用英文逗号分隔
 
   // 邮件配置
   SMTP_HOST = 'smtp.qq.com',             // 必填：SMTP 服务器地址 (如 smtp.qq.com 或 smtp.163.com)
@@ -24,7 +24,7 @@ async function getLocationId(cityInput) {
   if (/^\d+$/.test(cityInput)) {
     return { id: cityInput, name: cityInput };
   }
-  const geoUrl = `https://geoapi.qweather.com/v2/city/lookup?location=${encodeURIComponent(cityInput)}&key=${QWEATHER_KEY}`;
+  const geoUrl = `https://${QWEATHER_HOST}/geo/v2/city/lookup?location=${encodeURIComponent(cityInput)}&key=${QWEATHER_KEY}`;
   const res = await fetch(geoUrl);
   const data = await res.json();
   if (data.code !== '200' || !data.location?.length) {
@@ -88,32 +88,50 @@ ${indicesText || '暂无'}
    - 使用 HTML <table> 展示未来 7 天：日期（推算并标出星期几，今明后可高亮）、天气现象（配上合适的 Emoji 如 ☀️🌧️⛅）、最低~最高温度、风力与降水简况。`;
 
   const baseUrl = OPENAI_BASE_URL.replace(/\/+$/, '');
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: '你是一个擅长编写精美 HTML 邮件的气象生活顾问。只输出纯净的 HTML 代码片段，不要包含 markdown 代码块标记。' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.6
-    })
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`OpenAI 接口调用失败 (${response.status}): ${errText}`);
+  const models = OPENAI_MODEL.split(',').map(model => model.trim()).filter(Boolean);
+  if (!models.length) {
+    throw new Error('OPENAI_MODEL 至少需要配置一个模型');
   }
 
-  const result = await response.json();
-  let html = result.choices[0].message.content.trim();
-  // 清理可能残留的 ```html 标记
-  html = html.replace(/^```html\s*/i, '').replace(/```$/i, '');
-  return html;
+  for (const model of models) {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(60_000),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: '你是一个擅长编写精美 HTML 邮件的气象生活顾问。只输出纯净的 HTML 代码片段，不要包含 markdown 代码块标记。' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.6
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      const content = result.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error('模型未返回文本内容');
+      }
+      // 清理可能残留的 ```html 标记
+      const html = content.trim().replace(/^```html\s*/i, '').replace(/```$/i, '').trim();
+      if (!html) {
+        throw new Error('模型返回内容为空');
+      }
+      return html;
+    } catch (err) {
+      console.warn(`⚠️ 模型 ${model} 调用失败: ${err.message}`);
+    }
+  }
+  throw new Error(`所有 AI 模型均调用失败: ${models.join(', ')}`);
 }
 
 /**
@@ -145,6 +163,9 @@ async function sendEmail(subject, htmlContent) {
  * 主流程
  */
 async function main() {
+  if (!QWEATHER_HOST?.trim()) {
+    throw new Error('请设置 QWEATHER_HOST 为和风天气账号专属 API 域名');
+  }
   console.log('⏳ 1. 正在解析城市信息...');
   const location = await getLocationId(CITY);
   console.log(`✅ 目标城市: ${location.name} (${location.id})`);
