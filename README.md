@@ -5,7 +5,7 @@
 ## 1. 准备配置
 
 - **和风天气**：准备 API Key，在[控制台设置](https://dev.qweather.com/docs/configuration/api-host/)查看账号专属 API Host，只填域名，不加 `https://`。
-- **城市 ID**：在 [LocationList 城市列表](https://github.com/qwd/LocationList)中查找，也支持直接填写中文城市名。使用数字 ID 时，邮件标题中的城市会显示为 ID。
+- **城市 ID**：在 [LocationList 城市列表](https://github.com/qwd/LocationList)中查找，也支持直接填写中文城市名。程序会查询城市名称，并显示在邮件标题和正文中。
 - **AI 服务**：准备 OpenAI 兼容接口的地址、API Key 和模型名。
 - **邮箱**：开启 SMTP 服务，准备服务器地址、端口和授权码。
 
@@ -17,7 +17,7 @@ Fork 或上传项目后，打开仓库 **Settings → Secrets and variables → 
 | --- | --- |
 | `QWEATHER_KEY` | 和风天气 API Key |
 | `QWEATHER_HOST` | 和风天气账号专属 API 域名 |
-| `CITY` | 城市 ID，例如 `101010100`（北京），或中文城市名 |
+| `CITY` | 一个或多个城市 ID／中文城市名，用英文逗号分隔，例如 `101010100,101020100` |
 | `OPENAI_API_KEY` | AI 服务 API Key |
 | `OPENAI_BASE_URL` | 接口根地址，例如 `https://api.openai.com/v1`，不要加 `/chat/completions` |
 | `OPENAI_MODEL` | 一个或多个可用模型名，用英文逗号分隔 |
@@ -28,6 +28,14 @@ Fork 或上传项目后，打开仓库 **Settings → Secrets and variables → 
 | `EMAIL_TO` | 收件邮箱；不填则发给发件人自己 |
 
 **除 `EMAIL_TO` 外请全部填写**，避免工作流将未设置的 Secret 作为空值传入。密钥只放在 Secrets 中，不要提交到代码。
+
+多个城市示例：
+
+```text
+101010100,101020100
+```
+
+按配置顺序分别为北京和上海发送邮件，每个城市一封，使用相同的收件人配置。单个城市的写法不变。若某个城市查询、生成或发送失败，本次运行会停止，已发送的邮件不会撤回；重新运行会从第一个城市开始。
 
 多个模型示例：
 

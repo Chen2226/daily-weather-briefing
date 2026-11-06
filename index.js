@@ -4,7 +4,7 @@ import nodemailer from 'nodemailer';
 const {
   QWEATHER_KEY,                          // 必填：和风天气 API Key
   QWEATHER_HOST,                        // 必填：和风天气账号专属 API Host
-  CITY = '101010100',                    // 必填：支持中文城市名（如 "杭州"）或 LocationID
+  CITY = '101010100',                    // 支持中文城市名或 LocationID，多个城市用英文逗号分隔
   OPENAI_API_KEY,                        // 必填：OpenAI 兼容接口密钥
   OPENAI_BASE_URL = 'https://api.openai.com/v1', // 选填：接口地址
   OPENAI_MODEL = 'gpt-4o-mini',          // 选填：模型名称，多个模型用英文逗号分隔
@@ -18,12 +18,9 @@ const {
 } = process.env;
 
 /**
- * 辅助函数：支持直接填中文城市名，自动转为和风 LocationID
+ * 辅助函数：通过城市名或 LocationID 查询城市名称和 ID
  */
 async function getLocationId(cityInput) {
-  if (/^\d+$/.test(cityInput)) {
-    return { id: cityInput, name: cityInput };
-  }
   const geoUrl = `https://${QWEATHER_HOST}/geo/v2/city/lookup?location=${encodeURIComponent(cityInput)}&key=${QWEATHER_KEY}`;
   const res = await fetch(geoUrl);
   const data = await res.json();
@@ -166,21 +163,31 @@ async function main() {
   if (!QWEATHER_HOST?.trim()) {
     throw new Error('请设置 QWEATHER_HOST 为和风天气账号专属 API 域名');
   }
-  console.log('⏳ 1. 正在解析城市信息...');
-  const location = await getLocationId(CITY);
-  console.log(`✅ 目标城市: ${location.name} (${location.id})`);
+  const cities = CITY.split(',').map(city => city.trim()).filter(Boolean);
+  if (!cities.length) {
+    throw new Error('CITY 至少需要配置一个城市');
+  }
 
-  console.log('⏳ 2. 正在拉取和风天气 7 天数据...');
-  const weather = await getWeatherData(location.id);
+  for (const city of cities) {
+    console.log('⏳ 1. 正在解析城市信息...');
+    const location = await getLocationId(city);
+    console.log(`✅ 目标城市: ${location.name} (${location.id})`);
 
-  console.log('⏳ 3. 正在请求 AI 生成今明后注意事项与 HTML 邮件...');
-  const htmlReport = await generateHtmlEmail(location.name, weather);
+    console.log('⏳ 2. 正在拉取和风天气 7 天数据...');
+    const weather = await getWeatherData(location.id);
 
-  const today = weather.daily[0];
-  const subject = `🌤️ [${location.name}] 今日${today.textDay} ${today.tempMin}~${today.tempMax}°C | 近7天天气与出行提醒`;
+    console.log('⏳ 3. 正在请求 AI 生成今明后注意事项与 HTML 邮件...');
+    const htmlReport = await generateHtmlEmail(location.name, weather);
 
-  console.log('⏳ 4. 正在发送邮件...');
-  await sendEmail(subject, htmlReport);
+    const today = weather.daily[0];
+    const subject = `🌤️ [${location.name}] 今日${today.textDay} ${today.tempMin}~${today.tempMax}°C | 近7天天气与出行提醒`;
+
+    console.log('⏳ 4. 正在发送邮件...');
+    const cityHeading = location.name.replace(/[&<>"']/g, char => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[char]));
+    await sendEmail(subject, `<h2>${cityHeading}天气简报</h2>${htmlReport}`);
+  }
   console.log('🎉 全部任务执行完毕！');
 }
 
