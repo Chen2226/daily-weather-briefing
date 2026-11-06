@@ -28,19 +28,24 @@ async function getLocationId(cityInput) {
     throw new Error(`无法找到城市 [${cityInput}]，和风返回: ${JSON.stringify(data)}`);
   }
   const loc = data.location[0];
-  return { id: loc.id, name: `${loc.adm1}·${loc.name}` };
+  return { id: loc.id, name: `${loc.adm1}·${loc.name}`, lat: loc.lat, lon: loc.lon };
 }
 
 /**
  * 步骤 1：获取和风天气未来 7 天预报、逐小时预报和当天生活指数
  */
-async function getWeatherData(locationId) {
-  const weatherUrl = `https://${QWEATHER_HOST}/v7/weather/7d?location=${locationId}&key=${QWEATHER_KEY}`;
-  const weatherRes = await fetch(weatherUrl);
+async function getWeatherData({ id: locationId, lat, lon }) {
+  if (lat == null || lon == null || String(lat).trim() === '' || String(lon).trim() === '' ||
+      !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) {
+    throw new Error('城市查询未返回有效经纬度');
+  }
+  const coordinates = `${Number(lat).toFixed(2)}/${Number(lon).toFixed(2)}`;
+  const weatherUrl = `https://${QWEATHER_HOST}/weather/v1/daily/${coordinates}?days=7&localTime=true&lang=zh`;
+  const weatherRes = await fetch(weatherUrl, { headers: { 'X-QW-Api-Key': QWEATHER_KEY } });
   const weatherData = await weatherRes.json();
 
-  if (weatherData.code !== '200') {
-    throw new Error(`获取7天天气失败: ${JSON.stringify(weatherData)}`);
+  if (!weatherRes.ok || !Array.isArray(weatherData.days) || !weatherData.days.length) {
+    throw new Error(`获取7天天气失败 (HTTP ${weatherRes.status}): ${JSON.stringify(weatherData)}`);
   }
 
   // 获取当天生活指数 (1:运动, 3:穿衣, 5:紫外线, 9:感冒)
@@ -49,25 +54,28 @@ async function getWeatherData(locationId) {
   const indicesData = await indicesRes.json();
 
   let hourly = [];
-  let hourlyUpdateTime = '';
+  let hourlyAttributions = [];
   try {
-    const hourlyUrl = `https://${QWEATHER_HOST}/v7/weather/24h?location=${locationId}&key=${QWEATHER_KEY}`;
-    const hourlyRes = await fetch(hourlyUrl, { signal: AbortSignal.timeout(15_000) });
+    const hourlyUrl = `https://${QWEATHER_HOST}/weather/v1/hourly/${coordinates}?hours=24&localTime=true&lang=zh`;
+    const hourlyRes = await fetch(hourlyUrl, {
+      headers: { 'X-QW-Api-Key': QWEATHER_KEY },
+      signal: AbortSignal.timeout(15_000)
+    });
     const hourlyData = await hourlyRes.json();
-    if (!hourlyRes.ok || hourlyData.code !== '200' || !Array.isArray(hourlyData.hourly)) {
-      throw new Error(`HTTP ${hourlyRes.status}，业务码 ${hourlyData.code}`);
+    if (!hourlyRes.ok || !Array.isArray(hourlyData.hours)) {
+      throw new Error(`逐小时接口响应无效 (HTTP ${hourlyRes.status})`);
     }
-    // fxTime 自带城市当地时区；按预报日期筛选，不按运行机器的 UTC 日期筛选。
-    hourly = hourlyData.hourly.filter(h => h.fxTime?.slice(0, 10) === weatherData.daily[0].fxDate);
-    hourlyUpdateTime = hourlyData.updateTime || '';
+    // localTime=true 返回城市当地时间，按预报日期筛选，避免混入明天的数据。
+    hourly = hourlyData.hours.filter(h => h.forecastTime?.slice(0, 10) === weatherData.days[0].forecastStartTime.slice(0, 10));
+    hourlyAttributions = hourlyData.metadata?.attributions || [];
   } catch (err) {
     console.warn(`⚠️ 逐小时预报不可用，将仅提供每日天气建议: ${err.message}`);
   }
 
   return {
     hourly,
-    hourlyUpdateTime,
-    daily: weatherData.daily,
+    attributions: [...new Set([...(weatherData.metadata?.attributions || []), ...hourlyAttributions])],
+    daily: weatherData.days,
     indices: indicesData.code === '200' ? indicesData.daily : []
   };
 }
@@ -78,17 +86,32 @@ async function getWeatherData(locationId) {
 async function generateHtmlEmail(cityName, weather) {
   const dailyText = weather.daily.map((d, idx) => {
     const label = idx === 0 ? '【今天】' : idx === 1 ? '【明天】' : idx === 2 ? '【后天】' : `【第${idx + 1}天】`;
-    return `${label} ${d.fxDate}: 白天${d.textDay}/夜间${d.textNight}, 气温 ${d.tempMin}°C ~ ${d.tempMax}°C, ` +
-           `${d.windDirDay}${d.windScaleDay}级, 降水量 ${d.precip}mm, 紫外线 ${d.uvIndex}, 湿度 ${d.humidity}%`;
+    const periods = [['白天', d.daytime], ['夜间', d.nighttime]].map(([name, period]) => {
+      const probability = period?.precipitation?.probability;
+      const humidity = period?.humidity;
+      return `${name}: ${period?.condition?.text ?? '未知'}, ` +
+        `风向 ${period?.wind?.direction?.compass ?? '未知'} ${period?.wind?.scale ?? '未知'}级, ` +
+        `降水量 ${period?.precipitation?.amount?.value ?? '未知'} ${period?.precipitation?.amount?.unit ?? ''}, ` +
+        `降水概率 ${probability == null ? '未提供' : Math.round(probability * 100) + '%'}, ` +
+        `湿度 ${humidity == null ? '未提供' : Math.round(humidity * 100) + '%'}`;
+    }).join('；');
+    return `${label} ${d.forecastStartTime.slice(0, 10)}: ` +
+      `最低温 ${d.temperatureMin?.value ?? '未知'} ${d.temperatureMin?.unit ?? ''}, ` +
+      `最高温 ${d.temperatureMax?.value ?? '未知'} ${d.temperatureMax?.unit ?? ''}, ` +
+      `最大紫外线指数 ${d.uvIndexMax ?? '未知'}；${periods}`;
   }).join('\n');
 
   const indicesText = weather.indices.map(i => `${i.name}(${i.category}): ${i.text}`).join('\n');
 
-  const hourlyText = weather.hourly.map(h =>
-    `${h.fxTime}: ${h.text ?? '暂无天气现象'}, 气温 ${h.temp ?? '未知'}°C, ` +
-    `降水概率 ${h.pop ?? '未知'}%, 降水量 ${h.precip ?? '未知'}mm, ` +
-    `${h.windDir ?? '未知风向'} ${h.windScale ?? '未知'}级`
-  ).join('\n');
+  const hourlyText = weather.hourly.map(h => {
+    const probability = h.precipitation?.probability;
+    const pop = probability == null ? '未提供' : `${Math.round(probability * 100)}%`;
+    return `${h.forecastTime}: ${h.condition?.text ?? '暂无天气现象'}, ` +
+      `气温 ${h.temperature?.value ?? '未知'} ${h.temperature?.unit ?? ''}, ` +
+      `降水概率 ${pop}, 降水量 ${h.precipitation?.amount?.value ?? '未知'} ${h.precipitation?.amount?.unit ?? ''}, ` +
+      `降水类型 ${h.precipitation?.type ?? '未知'}, ` +
+      `风向 ${h.wind?.direction?.compass ?? '未知'}, 风力 ${h.wind?.scale ?? '未知'}级`;
+  }).join('\n');
 
   const prompt = `你是一位贴心的私人气象生活助理。以下是【${cityName}】未来 7 天的气象数据及今日生活指数：
 
@@ -98,8 +121,9 @@ ${dailyText}
 ### 今日生活指数参考：
 ${indicesText || '暂无'}
 
-### 今天（${weather.daily[0].fxDate}）剩余时段逐小时预报（时间为城市当地时间，保留时区）：
-更新时间：${weather.hourlyUpdateTime || '未知'}
+### 今天（${weather.daily[0].forecastStartTime.slice(0, 10)}）剩余时段逐小时预报（时间为城市当地时间，保留时区）：
+更新时间：接口未提供，不得用预报时间冒充更新时间
+数据来源（请在邮件末尾保留）：${weather.attributions.join('，') || '和风天气'}
 ${hourlyText || '暂无逐小时数据，无法判断具体降雨时段'}
 
 请你直接输出一段**纯 HTML 代码**（不要用 \`\`\`html 包裹，直接以 <div> 开头），用于作为每日天气邮件的正文。
@@ -211,13 +235,13 @@ async function main() {
     console.log(`✅ 目标城市: ${location.name} (${location.id})`);
 
     console.log('⏳ 2. 正在拉取和风天气 7 天及逐小时数据...');
-    const weather = await getWeatherData(location.id);
+    const weather = await getWeatherData(location);
 
     console.log('⏳ 3. 正在请求 AI 生成今明后注意事项与 HTML 邮件...');
     const htmlReport = await generateHtmlEmail(location.name, weather);
 
     const today = weather.daily[0];
-    const subject = `🌤️ [${location.name}] 今日${today.textDay} ${today.tempMin}~${today.tempMax}°C | 近7天天气与出行提醒`;
+    const subject = `🌤️ [${location.name}] 今日${today.daytime?.condition?.text ?? '天气'} ${today.temperatureMin?.value ?? '?'}${today.temperatureMin?.unit ?? ''}~${today.temperatureMax?.value ?? '?'}${today.temperatureMax?.unit ?? ''} | 近7天天气与出行提醒`;
 
     console.log('⏳ 4. 正在发送邮件...');
     const cityHeading = location.name.replace(/[&<>"']/g, char => ({

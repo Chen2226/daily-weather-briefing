@@ -4,9 +4,11 @@
 
 今天的简报包含逐小时气温、降水概率、雨量和风力，并总结预计有雨的时间段。时间以城市当地时间为准，仅覆盖接口提供的今天剩余时段；小时级预报不能精确到分钟。若逐小时接口不可用，会保留每日简报并明确提示，不猜测降雨时间。
 
+每日和逐小时预报分别使用 `/weather/v1/daily/{latitude}/{longitude}` 和 `/weather/v1/hourly/{latitude}/{longitude}`，自动从城市查询结果获取经纬度，读取未来 7 天及 24 小时天气，无需新增配置。
+
 ## 1. 准备配置
 
-- **和风天气**：准备 API Key，在[控制台设置](https://dev.qweather.com/docs/configuration/api-host/)查看账号专属 API Host，只填域名，不加 `https://`。账号需具备城市查询、7 天天气和 [24 小时天气预报](https://dev.qweather.com/docs/api/weather/weather-hourly-forecast-webapi-v7/)的访问权限。
+- **和风天气**：准备 API Key，在[控制台设置](https://dev.qweather.com/docs/configuration/api-host/)查看账号专属 API Host，只填域名，不加 `https://`。账号需具备城市查询、[7 天天气](https://dev.qweather.com/docs/api/weather/weather-daily-forecast/)和 [24 小时天气预报](https://dev.qweather.com/docs/api/weather/weather-hourly-forecast/)的访问权限。
 - **城市 ID**：在 [LocationList 城市列表](https://github.com/qwd/LocationList)中查找，也支持直接填写中文城市名。程序会查询城市名称，并显示在邮件标题和正文中。
 - **AI 服务**：准备 OpenAI 兼容接口的地址、API Key 和模型名。
 - **邮箱**：开启 SMTP 服务，准备服务器地址、端口和授权码。
