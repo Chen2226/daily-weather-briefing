@@ -29,7 +29,7 @@ Fork 或上传项目后，打开仓库 **Settings → Secrets and variables → 
 | `SMTP_PORT` | 邮箱 SMTP 端口，例如 `465` |
 | `SMTP_USER` | 发件邮箱 |
 | `SMTP_PASS` | 邮箱 SMTP 授权码或服务商要求的凭据 |
-| `EMAIL_TO` | 收件邮箱；不填则发给发件人自己 |
+| `EMAIL_TO` | 一个或多个收件邮箱，用英文逗号分隔；不填则发给发件人自己 |
 
 **除 `EMAIL_TO` 外请全部填写**，避免工作流将未设置的 Secret 作为空值传入。密钥只放在 Secrets 中，不要提交到代码。
 
@@ -40,6 +40,14 @@ Fork 或上传项目后，打开仓库 **Settings → Secrets and variables → 
 ```
 
 按配置顺序分别为北京和上海发送邮件，每个城市一封，使用相同的收件人配置。单个城市的写法不变。若某个城市查询、生成或发送失败，本次运行会停止，已发送的邮件不会撤回；重新运行会从第一个城市开始。
+
+多个收件人示例（填写到 `EMAIL_TO` Secret）：
+
+```text
+alice@example.com,bob@example.com,carol@example.com
+```
+
+每个城市的邮件都会发送给全部收件人，收件人之间可以看到彼此的邮箱地址。单个邮箱的写法不变，留空则发给 `SMTP_USER`。
 
 多个模型示例：
 

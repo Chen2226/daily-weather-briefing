@@ -14,7 +14,7 @@ const {
   SMTP_PORT = '465',                     // 选填：SSL 端口默认 465
   SMTP_USER,                             // 必填：发件人邮箱账号 (如 123456@qq.com)
   SMTP_PASS,                             // 必填：发件人邮箱 SMTP 授权码
-  EMAIL_TO                               // 选填：收件人邮箱（如果不填，默认发给发件人自己）
+  EMAIL_TO                               // 选填：收件人邮箱，多个用英文逗号分隔；不填则发给自己
 } = process.env;
 
 /**
