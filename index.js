@@ -32,7 +32,7 @@ async function getLocationId(cityInput) {
 }
 
 /**
- * 步骤 1：获取和风天气未来 7 天预报 + 当天生活指数
+ * 步骤 1：获取和风天气未来 7 天预报、逐小时预报和当天生活指数
  */
 async function getWeatherData(locationId) {
   const weatherUrl = `https://${QWEATHER_HOST}/v7/weather/7d?location=${locationId}&key=${QWEATHER_KEY}`;
@@ -48,7 +48,25 @@ async function getWeatherData(locationId) {
   const indicesRes = await fetch(indicesUrl);
   const indicesData = await indicesRes.json();
 
+  let hourly = [];
+  let hourlyUpdateTime = '';
+  try {
+    const hourlyUrl = `https://${QWEATHER_HOST}/v7/weather/24h?location=${locationId}&key=${QWEATHER_KEY}`;
+    const hourlyRes = await fetch(hourlyUrl, { signal: AbortSignal.timeout(15_000) });
+    const hourlyData = await hourlyRes.json();
+    if (!hourlyRes.ok || hourlyData.code !== '200' || !Array.isArray(hourlyData.hourly)) {
+      throw new Error(`HTTP ${hourlyRes.status}，业务码 ${hourlyData.code}`);
+    }
+    // fxTime 自带城市当地时区；按预报日期筛选，不按运行机器的 UTC 日期筛选。
+    hourly = hourlyData.hourly.filter(h => h.fxTime?.slice(0, 10) === weatherData.daily[0].fxDate);
+    hourlyUpdateTime = hourlyData.updateTime || '';
+  } catch (err) {
+    console.warn(`⚠️ 逐小时预报不可用，将仅提供每日天气建议: ${err.message}`);
+  }
+
   return {
+    hourly,
+    hourlyUpdateTime,
     daily: weatherData.daily,
     indices: indicesData.code === '200' ? indicesData.daily : []
   };
@@ -66,6 +84,12 @@ async function generateHtmlEmail(cityName, weather) {
 
   const indicesText = weather.indices.map(i => `${i.name}(${i.category}): ${i.text}`).join('\n');
 
+  const hourlyText = weather.hourly.map(h =>
+    `${h.fxTime}: ${h.text ?? '暂无天气现象'}, 气温 ${h.temp ?? '未知'}°C, ` +
+    `降水概率 ${h.pop ?? '未知'}%, 降水量 ${h.precip ?? '未知'}mm, ` +
+    `${h.windDir ?? '未知风向'} ${h.windScale ?? '未知'}级`
+  ).join('\n');
+
   const prompt = `你是一位贴心的私人气象生活助理。以下是【${cityName}】未来 7 天的气象数据及今日生活指数：
 
 ### 未来7天预报数据：
@@ -74,14 +98,27 @@ ${dailyText}
 ### 今日生活指数参考：
 ${indicesText || '暂无'}
 
-请你直接输出一段**纯 HTML 代码**（不要用 \`\`\`html 包裹，直接以 <div> 开头），用于作为每日天气邮件的正文。
-要求采用现代、清爽的卡片式内联 CSS 样式（适配手机和电脑阅读），严格包含以下两部分内容：
+### 今天（${weather.daily[0].fxDate}）剩余时段逐小时预报（时间为城市当地时间，保留时区）：
+更新时间：${weather.hourlyUpdateTime || '未知'}
+${hourlyText || '暂无逐小时数据，无法判断具体降雨时段'}
 
-1. **💡 今/明/后三天重点注意事项（高亮提示卡片）**
+请你直接输出一段**纯 HTML 代码**（不要用 \`\`\`html 包裹，直接以 <div> 开头），用于作为每日天气邮件的正文。
+要求采用现代、清爽的卡片式内联 CSS 样式（适配手机和电脑阅读），严格包含以下三部分内容：
+
+1. **🕒 今天分时天气与降雨提醒**
+   - 优先总结预计有雨的时段，用“预计 HH:mm–HH:mm 有雨”等措辞，并列出对应降水概率范围、雨量及出行建议；单个小时点写“HH:mm 前后可能有雨”，不要凭空扩展起止时间。
+   - 只能合并时间相邻、相隔恰好一小时且均有降雨依据的预报点；不要跨越无雨时段或数据缺口。依据天气现象区分雨、雪和雨夹雪，不能将所有降水都写成下雨。
+   - 若仅有降水概率而天气现象未报雨，表述为“有降水可能”，不可断言有雨。概率缺失写“未提供”，不能当成 0%。没有降雨依据时只说“已覆盖时段暂无明显降雨信号”，不可保证全天无雨。
+   - 用紧凑表格列出已提供的逐小时数据：时间、天气、气温、降水概率、降水量和风力，并总结通勤、午间、傍晚的变化（仅限数据覆盖时段）。
+   - 标明数据覆盖的起止时刻、预报更新时间及“城市当地时间”；仅分析今天，不能把明天凌晨的数据算作今天，也不能补写过去或未覆盖时段的天气。
+   - 逐小时数据缺失时，明确写“逐小时预报暂不可用，无法判断具体降雨时段”，只给每日层面的建议，不得从日预报猜测几点下雨。
+   - 提醒这是小时级预报，降雨起止可能变化，不代表分钟级精确预报；不得虚构任何数值。
+
+2. **💡 今/明/后三天重点注意事项（高亮提示卡片）**
    - 分别针对**今天**、**明天**、**后天**给出具体且生活化的建议（用不同颜色的标签或列表区分）。
    - 重点结合：降雨带伞提醒、温度骤变/昼夜温差穿衣建议、紫外线防晒、大风或易感冒提醒。语气温暖精炼。
 
-2. **📅 未来 7 天天气一览（精美表格）**
+3. **📅 未来 7 天天气一览（精美表格）**
    - 使用 HTML <table> 展示未来 7 天：日期（推算并标出星期几，今明后可高亮）、天气现象（配上合适的 Emoji 如 ☀️🌧️⛅）、最低~最高温度、风力与降水简况。`;
 
   const baseUrl = OPENAI_BASE_URL.replace(/\/+$/, '');
@@ -173,7 +210,7 @@ async function main() {
     const location = await getLocationId(city);
     console.log(`✅ 目标城市: ${location.name} (${location.id})`);
 
-    console.log('⏳ 2. 正在拉取和风天气 7 天数据...');
+    console.log('⏳ 2. 正在拉取和风天气 7 天及逐小时数据...');
     const weather = await getWeatherData(location.id);
 
     console.log('⏳ 3. 正在请求 AI 生成今明后注意事项与 HTML 邮件...');
